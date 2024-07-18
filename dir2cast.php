@@ -126,6 +126,57 @@ abstract class GetterSetter {
     }    
 }
 
+class UUID {
+  const NS_URL = "6ba7b811-9dad-11d1-80b4-00c04fd430c8";
+  const NS_DNS = "6ba7b810-9dad-11d1-80b4-00c04fd430c8";
+  const NS_OID = "6ba7b812-9dad-11d1-80b4-00c04fd430c8";
+  const NS_X500 = "6ba7b814-9dad-11d1-80b4-00c04fd430c8";
+
+  public static function v5($namespace, $name) {
+    if(!self::is_valid($namespace)) return false;
+
+    // Get hexadecimal components of namespace
+    $nhex = str_replace(array('-','{','}'), '', $namespace);
+
+    // Binary Value
+    $nstr = '';
+
+    // Convert Namespace UUID to bits
+    for($i = 0; $i < strlen($nhex); $i+=2) {
+      $nstr .= chr(hexdec($nhex[$i].$nhex[$i+1]));
+    }
+
+    // Calculate hash value
+    $hash = sha1($nstr . $name);
+
+    return sprintf('%08s-%04s-%04x-%04x-%12s',
+
+      // 32 bits for "time_low"
+      substr($hash, 0, 8),
+
+      // 16 bits for "time_mid"
+      substr($hash, 8, 4),
+
+      // 16 bits for "time_hi_and_version",
+      // four most significant bits holds version number 5
+      (hexdec(substr($hash, 12, 4)) & 0x0fff) | 0x5000,
+
+      // 16 bits, 8 bits for "clk_seq_hi_res",
+      // 8 bits for "clk_seq_low",
+      // two most significant bits holds zero and one for variant DCE1.1
+      (hexdec(substr($hash, 16, 4)) & 0x3fff) | 0x8000,
+
+      // 48 bits for "node"
+      substr($hash, 20, 12)
+    );
+  }
+
+  public static function is_valid($uuid) {
+    return preg_match('/^\{?[0-9a-f]{8}\-?[0-9a-f]{4}\-?[0-9a-f]{4}\-?'.
+                      '[0-9a-f]{4}\-?[0-9a-f]{12}\}?$/i', $uuid) === 1;
+  }
+}
+
 interface Podcast_Helper {
     public function id();
     public function appendToChannel(DOMElement $d, DOMDocument $doc);
@@ -315,7 +366,7 @@ class Atom_Podcast_Helper extends GetterSetter implements Podcast_Helper {
             $linkNode->setAttribute('href', $this->self_link);
             $linkNode->setAttribute('rel', 'self');
             $linkNode->setAttribute('type', ATOM_TYPE);
-        }        
+        }
     }
     
     public function appendToItem(DOMElement $item_element, DOMDocument $doc, RSS_Item $item)
@@ -327,6 +378,44 @@ class Atom_Podcast_Helper extends GetterSetter implements Podcast_Helper {
     {
         $this->self_link = $link;
     }
+}
+
+class Podcastindex_Podcast_Helper extends GetterSetter implements Podcast_Helper {
+    public function id()
+    {
+         return get_class($this);
+    }
+
+    public $guid = "";
+
+    public function __construct() { }
+
+    public function getNSURI()
+    {
+        return 'https://podcastindex.org/namespace/1.0';
+    }
+
+    public function addNamespaceTo(DOMElement $d, DOMDocument $doc)
+    {
+        $d->appendChild( $doc->createAttribute( 'xmlns:podcast' ) )
+            ->appendChild( new DOMText( $this->getNSURI() ) );
+    }
+
+    public function appendToChannel(DOMElement $channel, DOMDocument $doc)
+    {
+        foreach ($this->parameters as $name => $val)
+        {
+            $channel->appendChild( $doc->createElement('podcast:' . $name) )
+                ->appendChild( new DOMText($val)    );
+        }
+
+    }
+
+    public function appendToItem(DOMElement $item_element, DOMDocument $doc, RSS_Item $item)
+    {
+
+    }
+
 }
 
 class iTunes_Podcast_Helper extends GetterSetter implements Podcast_Helper {
@@ -424,7 +513,7 @@ class iTunes_Podcast_Helper extends GetterSetter implements Podcast_Helper {
         // iTunes summary is excluded if it's empty, because the default is to 
         // duplicate what's in the "description field", but iTunes will fall back 
         // to showing the <description> if there is no summary anyway.
-        $itunes_summary = $item->getSummary();
+        $itunes_summary = ""; //$item->getSummary();
         if($itunes_summary !== '')
         {
             $elements['summary'] = $itunes_summary;
@@ -584,17 +673,20 @@ class RSS_Item extends GetterSetter {
         }
 
         // Look to see if there is an item specific image and include it.
-        $item_image = $this->getImage();
-        if(!empty($item_image))
-        {
-            $item_element->appendChild( $doc->createElement('image') )
-                ->appendChild(new DOMText($item_image));
-        }
+        // $item_image = $this->getImage();
+        // if(!empty($item_image))
+        // {
+        //     $item_element->appendChild( $doc->createElement('image') )
+        //         ->appendChild(new DOMText($item_image));
+        // }
 
         $enclosure = $item_element->appendChild(new DOMElement('enclosure'));
         $enclosure->setAttribute('url', $this->getLink());
         $enclosure->setAttribute('length', $this->getLength());
         $enclosure->setAttribute('type', $this->getType());
+
+        $guid = $item_element->appendChild(new DOMElement('guid'));
+        $guid->appendChild(new DOMText($this->getLink()));
     }
     
     public function addHelper(Podcast_Helper $helper)
@@ -893,7 +985,7 @@ class Media_RSS_Item extends RSS_File_Item implements Serializable {
         $title_parts = array();
         if(self::$LONG_TITLES)
         {
-            if($this->getID3Album()) $title_parts[] = $this->getID3Album();
+            if($this->getID3Comment()) $title_parts[] = $this->getID3Comment();
             if($this->getID3Artist()) $title_parts[] = $this->getID3Artist();
         }
         if($this->getID3Title())
@@ -1224,7 +1316,7 @@ class Dir_Podcast extends Podcast
             if(self::$RECURSIVE_DIRECTORY_ITERATOR)
             {
                 $di = new RecursiveIteratorIterator(
-                    new RecursiveDirectoryIterator($this->source_dir),
+                    new RecursiveDirectoryIterator($this->source_dir, FilesystemIterator::FOLLOW_SYMLINKS),
                     RecursiveIteratorIterator::SELF_FIRST
                 );
             }
@@ -1745,7 +1837,7 @@ class SettingsHandler
         if(defined('CLI_ONLY')) {
             define('DIR2CAST_BASE', realpath(dirname($argv[0])));
         } else {
-            define('DIR2CAST_BASE', dirname(__FILE__));
+            define('DIR2CAST_BASE', dirname($_SERVER["SCRIPT_FILENAME"]));
         }
 
         // If an installation-wide config file exists, load it now.
@@ -2149,6 +2241,7 @@ class Dispatcher
             $getid3 = $podcast->addHelper(new Caching_getID3_Podcast_Helper(TMP_DIR, new getID3_Podcast_Helper()));
             $atom   = $podcast->addHelper(new Atom_Podcast_Helper());
             $itunes = $podcast->addHelper(new iTunes_Podcast_Helper());
+            $podcastindex = $podcast->addHelper(new Podcastindex_Podcast_Helper());
 
             $podcast->setTitle(TITLE);
             $podcast->setLink(LINK);
@@ -2171,6 +2264,8 @@ class Dispatcher
             $itunes->setOwnerEmail(ITUNES_OWNER_EMAIL);
 
             $itunes->addCategories(ITUNES_CATEGORIES);
+
+            $podcastindex->setGuid(UUID::v5(UUID::NS_URL, RSS_LINK));
 
             $podcast->setGenerator(GENERATOR);
         }
